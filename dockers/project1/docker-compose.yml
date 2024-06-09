@@ -8,12 +8,12 @@ services:
     container_name: project1_container
     volumes:
       - ~/.ssh:/home/devuser/.ssh
-      - ../../certs:/etc/ssl/private
     ports:
       - "2022:22"
       - "8443:8443"
+      - "8080:8080"
     environment:
       - GITHUB_REPO=https://github.com/ricklon/gpt4vision-streamlit
       - GIT_USER_NAME=ricklon
       - GIT_USER_EMAIL=rick.rickanderson@gmail.com
-    command: /bin/bash -c "service ssh start && su devuser -c '/home/devuser/setup.sh && code-server --cert=/etc/ssl/private/selfsigned.crt --cert-key=/etc/ssl/private/selfsigned.key --bind-addr 0.0.0.0:8443'"
+    command: /bin/bash -c "service ssh start && su devuser -c '/home/devuser/setup.sh && code-server --bind-addr 0.0.0.0:8443'"
