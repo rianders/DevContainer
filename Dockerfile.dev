@@ -78,3 +78,4 @@ EXPOSE 22 8080
 
 # Start services
 CMD ["bash", "-c", "service ssh start && su devuser -c '/home/devuser/setup.sh && code-server --bind-addr 0.0.0.0:8080'"]
+

@@ -31,9 +31,9 @@ exit_on_error() {
 check_port_in_use() {
     local port=$1
     if lsof -i :$port &> /dev/null; then
-        return 0
+        return 0  # Port is in use
     else
-        return 1
+        return 1  # Port is not in use
     fi
 }
 
@@ -58,41 +58,56 @@ prompt_for_port() {
     done
 }
 
-# Ensure Docker is installed and running
-if ! command -v docker &> /dev/null; then
-    exit_on_error "Docker is not installed. Please install Docker and try again."
-fi
+# Function to remove a project
+remove_project() {
+    read_input "Enter your project name" "project1" PROJECT_NAME
+    DEFAULT_CONTAINER_NAME="${PROJECT_NAME}_container"
+    CODE_SERVER_CONTAINER_NAME="code-server-${PROJECT_NAME}"
+    PROJECT_DIR="${DEVCONTAINERS_DIR}/${PROJECT_NAME}"
 
-if ! docker info &> /dev/null; then
-    exit_on_error "Docker is not running. Please start Docker and try again."
-fi
+    # Debugging output
+    log "Removing project: ${PROJECT_NAME}"
+    log "Project directory: ${PROJECT_DIR}"
+    log "Container name: ${DEFAULT_CONTAINER_NAME}"
 
-# Ensure Docker Compose is installed
-if ! command -v docker-compose &> /dev/null; then
-    exit_on_error "Docker Compose is not installed. Please install Docker Compose and try again."
-fi
+    if [ -f "${PROJECT_DIR}/docker-compose.yml" ]; then
+        docker-compose -f ${PROJECT_DIR}/docker-compose.yml down || exit_on_error "Failed to stop Docker container for $PROJECT_NAME"
+        rm -rf ${PROJECT_DIR}
+        if [ -f "$PROJECTS_FILE" ]; then
+            sed -i '' "/^$PROJECT_NAME|/d" $PROJECTS_FILE || exit_on_error "Failed to update $PROJECTS_FILE"
+        fi
+        log "Project $PROJECT_NAME removed."
+    else
+        log "Configuration not found at ${PROJECT_DIR}/docker-compose.yml"
+        exit_on_error "No configuration found for project $PROJECT_NAME."
+    fi
+}
 
-# Get the directory of this script
-SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" &> /dev/null && pwd)
-
-# Setup the container
+# Function to setup a container
 setup_container() {
     # Default values
     DEFAULT_GITHUB_REPO="https://github.com/ricklon/gpt4vision-streamlit"
     DEFAULT_GIT_USER_NAME="ricklon"
     DEFAULT_GIT_USER_EMAIL="rick.rickanderson@gmail.com"
     DEFAULT_DEVCONTAINERS_DIR="${HOME}/devcontainers"
-    DEFAULT_SSH_PORT="2022"
-    DEFAULT_CODE_SERVER_PORT="8443"
-    DEFAULT_HTTP_PORT="8080"
+    DEFAULT_SSH_PORT="2023"
+    DEFAULT_CODE_SERVER_PORT="8444"
+    DEFAULT_HTTP_PORT="8081"
 
     # Get user input with default values
     read_input "Enter your project name" "project1" PROJECT_NAME
     DEFAULT_CONTAINER_NAME="${PROJECT_NAME}_container"
+    CODE_SERVER_CONTAINER_NAME="code-server-${PROJECT_NAME}"
     read_input "Enter your GitHub repository URL" $DEFAULT_GITHUB_REPO GITHUB_REPO
     read_input "Enter your Git user name" $DEFAULT_GIT_USER_NAME GIT_USER_NAME
     read_input "Enter your Git user email" $DEFAULT_GIT_USER_EMAIL GIT_USER_EMAIL
     read_input "Enter the location for devcontainers" $DEFAULT_DEVCONTAINERS_DIR DEVCONTAINERS_DIR
+    read_input "Do you want to provide a GitHub PAT? (y/n)" "n" USE_PAT
+
+    if [ "$USE_PAT" == "y" ]; then
+        read_input "Enter your GitHub personal access token" "" GITHUB_PAT
+    fi
+
     prompt_for_port "Enter the SSH port to use (Available: 'o' to override)" $DEFAULT_SSH_PORT SSH_PORT
     prompt_for_port "Enter the code server port to use (Available: 'o' to override)" $DEFAULT_CODE_SERVER_PORT CODE_SERVER_PORT
     prompt_for_port "Enter the HTTP port to use (Available: 'o' to override)" $DEFAULT_HTTP_PORT HTTP_PORT
@@ -117,26 +132,43 @@ services:
   dev:
     build:
       context: .  # This should be relative to the location of docker-compose.yml
-      dockerfile: Dockerfile
+      dockerfile: Dockerfile.dev
     container_name: $DEFAULT_CONTAINER_NAME
-    volumes:
-      - ~/.ssh:/home/devuser/.ssh
     ports:
       - "${SSH_PORT}:22"
-      - "${CODE_SERVER_PORT}:8443"
       - "${HTTP_PORT}:8080"
     environment:
       - GITHUB_REPO=$GITHUB_REPO
       - GIT_USER_NAME=$GIT_USER_NAME
       - GIT_USER_EMAIL=$GIT_USER_EMAIL
-    command: /bin/bash -c "service ssh start && su devuser -c '/home/devuser/setup.sh && code-server --bind-addr 0.0.0.0:${CODE_SERVER_PORT}'"
+    volumes:
+      - dev-home:/home/devuser
+
+  code-server:
+    image: codercom/code-server:latest
+    container_name: $CODE_SERVER_CONTAINER_NAME
+    ports:
+      - "${CODE_SERVER_PORT}:8080"  # Map external port CODE_SERVER_PORT to internal port 8080
+    environment:
+      - PASSWORD=mysecurepassword
+    volumes:
+      - dev-home:/home/devuser
+    command: --auth password --bind-addr 0.0.0.0:8080 /home/devuser/project
+    networks:
+      - dev-network
+
+volumes:
+  dev-home:
+
+networks:
+  dev-network:
 EOF
 
     # Change to the script directory
     cd "$SCRIPT_DIR"
 
     # Copy the Dockerfile and other necessary files to the devcontainer directory
-    cp Dockerfile ${DEVCONTAINERS_DIR}/${PROJECT_NAME}/Dockerfile || exit_on_error "Failed to copy Dockerfile"
+    cp Dockerfile.dev ${DEVCONTAINERS_DIR}/${PROJECT_NAME}/Dockerfile.dev || exit_on_error "Failed to copy Dockerfile"
     cp dockers/id_devuser_rsa.pub ${DEVCONTAINERS_DIR}/${PROJECT_NAME}/id_devuser_rsa.pub || exit_on_error "Failed to copy SSH public key"
     cp dockers/setup.sh ${DEVCONTAINERS_DIR}/${PROJECT_NAME}/setup.sh || exit_on_error "Failed to copy setup.sh"
     cp dockers/build.sh ${DEVCONTAINERS_DIR}/${PROJECT_NAME}/build.sh || exit_on_error "Failed to copy build.sh"
@@ -156,19 +188,36 @@ services:
   dev:
     build:
       context: .  # This should be relative to the location of docker-compose.yml
-      dockerfile: Dockerfile
+      dockerfile: Dockerfile.dev
     container_name: $DEFAULT_CONTAINER_NAME
-    volumes:
-      - ~/.ssh:/home/devuser/.ssh
     ports:
       - "${SSH_PORT}:22"
-      - "${CODE_SERVER_PORT}:8443"
       - "${HTTP_PORT}:8080"
     environment:
       - GITHUB_REPO=$GITHUB_REPO
       - GIT_USER_NAME=$GIT_USER_NAME
       - GIT_USER_EMAIL=$GIT_USER_EMAIL
-    command: /bin/bash -c "service ssh start && su devuser -c '/home/devuser/setup.sh && code-server --bind-addr 0.0.0.0:${CODE_SERVER_PORT}'"
+    volumes:
+      - dev-home:/home/devuser
+
+  code-server:
+    image: codercom/code-server:latest
+    container_name: $CODE_SERVER_CONTAINER_NAME
+    ports:
+      - "${CODE_SERVER_PORT}:8080"  # Map external port CODE_SERVER_PORT to internal port 8080
+    environment:
+      - PASSWORD=mysecurepassword
+    volumes:
+      - dev-home:/home/devuser
+    command: --auth password --bind-addr 0.0.0.0:8080 /home/devuser/project
+    networks:
+      - dev-network
+
+volumes:
+  dev-home:
+
+networks:
+  dev-network:
 EOF
     done
 
@@ -181,10 +230,16 @@ EOF
         exit_on_error "The Docker container is not running. Check the logs above for details."
     fi
 
-    # Run the clone script inside the container
+    # Run the clone script inside the container using the PAT if provided
+    if [ "$USE_PAT" == "y" ]; then
+        CLONE_CMD="git clone https://$GITHUB_PAT@github.com/${GITHUB_REPO#https://github.com/} project"
+    else
+        CLONE_CMD="git clone $GITHUB_REPO project"
+    fi
+
     docker exec -it $DEFAULT_CONTAINER_NAME bash -c "
       cd /home/devuser &&
-      git clone $GITHUB_REPO project &&
+      $CLONE_CMD &&
       chown -R devuser:devuser project
     " || exit_on_error "Failed to clone GitHub repository inside the container"
 
@@ -198,6 +253,7 @@ EOF
 start_container() {
     read_input "Enter your project name" "project1" PROJECT_NAME
     DEFAULT_CONTAINER_NAME="${PROJECT_NAME}_container"
+    CODE_SERVER_CONTAINER_NAME="code-server-${PROJECT_NAME}"
     if [ -f "${DEVCONTAINERS_DIR}/${PROJECT_NAME}/docker-compose.yml" ]; then
         docker-compose -f ${DEVCONTAINERS_DIR}/${PROJECT_NAME}/docker-compose.yml up -d || exit_on_error "Failed to start Docker container for $PROJECT_NAME"
         log "Container started for project $PROJECT_NAME."
@@ -210,6 +266,7 @@ start_container() {
 stop_container() {
     read_input "Enter your project name" "project1" PROJECT_NAME
     DEFAULT_CONTAINER_NAME="${PROJECT_NAME}_container"
+    CODE_SERVER_CONTAINER_NAME="code-server-${PROJECT_NAME}"
     if [ -f "${DEVCONTAINERS_DIR}/${PROJECT_NAME}/docker-compose.yml" ]; then
         docker-compose -f ${DEVCONTAINERS_DIR}/${PROJECT_NAME}/docker-compose.yml down || exit_on_error "Failed to stop Docker container for $PROJECT_NAME"
         log "Container stopped for project $PROJECT_NAME."
@@ -222,34 +279,11 @@ stop_container() {
 rebuild_container() {
     read_input "Enter your project name" "project1" PROJECT_NAME
     DEFAULT_CONTAINER_NAME="${PROJECT_NAME}_container"
+    CODE_SERVER_CONTAINER_NAME="code-server-${PROJECT_NAME}"
     if [ -f "${DEVCONTAINERS_DIR}/${PROJECT_NAME}/docker-compose.yml" ]; then
         docker-compose -f ${DEVCONTAINERS_DIR}/${PROJECT_NAME}/docker-compose.yml up --build -d || exit_on_error "Failed to rebuild Docker container for $PROJECT_NAME"
         log "Container rebuilt for project $PROJECT_NAME."
     else
-        exit_on_error "No configuration found for project $PROJECT_NAME."
-    fi
-}
-
-# Function to remove a project
-remove_project() {
-    read_input "Enter your project name" "project1" PROJECT_NAME
-    DEFAULT_CONTAINER_NAME="${PROJECT_NAME}_container"
-    PROJECT_DIR="${DEVCONTAINERS_DIR}/${PROJECT_NAME}"
-
-    # Debugging output
-    log "Removing project: ${PROJECT_NAME}"
-    log "Project directory: ${PROJECT_DIR}"
-    log "Container name: ${DEFAULT_CONTAINER_NAME}"
-
-    if [ -f "${PROJECT_DIR}/docker-compose.yml" ]; then
-        docker-compose -f ${PROJECT_DIR}/docker-compose.yml down || exit_on_error "Failed to stop Docker container for $PROJECT_NAME"
-        rm -rf ${PROJECT_DIR}
-        if [ -f "$PROJECTS_FILE" ]; then
-            sed -i '' "/^$PROJECT_NAME|/d" $PROJECTS_FILE || exit_on_error "Failed to update $PROJECTS_FILE"
-        fi
-        log "Project $PROJECT_NAME removed."
-    else
-        log "Configuration not found at ${PROJECT_DIR}/docker-compose.yml"
         exit_on_error "No configuration found for project $PROJECT_NAME."
     fi
 }
