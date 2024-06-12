@@ -1,10 +1,12 @@
 #!/bin/bash
 
-# File to store project configurations
-PROJECTS_FILE="projects.conf"
+
 
 # Set DEVCONTAINERS_DIR to your desired directory
 DEVCONTAINERS_DIR="${HOME}/devcontainers"
+
+# File to store project configurations
+PROJECTS_FILE="${DEVCONTAINERS_DIR}/projects.conf"
 
 # Function to read user input with a default value
 read_input() {
